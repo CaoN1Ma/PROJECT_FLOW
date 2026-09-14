@@ -1,0 +1,6 @@
+# Local agent / harness state — contains session data, never publish it
+.dsh
+
+# OS noise
+.DS_Store
+Thumbs.db
