@@ -17,21 +17,33 @@ Produce `docs/project_flow.md`: a single Mermaid flowchart that traces the proje
 
 ```mermaid
 flowchart TD
+    %% ---- color classes: copy verbatim, every one needs color: ----
+    classDef entry fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0b2c4d
+    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
+    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
+    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
+    classDef data  fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#053b42
+    classDef ext   fill:#f5f5f5,stroke:#9e9e9e,stroke-width:2px,color:#1a1a1a
+    classDef warn  fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#4a2500
+    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+
     %% ==================== Input:<source> ====================
-    IN1["📥 <input name><br/>① <protocol/entry> carries <fields><br/>② <meaning of the key fields><br/>③ <meaning of special switches>"]
+    IN1["📥 <input name><br/>① <protocol/entry> carries <fields><br/>② <meaning of the key fields><br/>③ <meaning of special switches>"]:::io
 
     %% ==================== <stage name>:<what this layer does> ====================
     subgraph SUB_XXX["<file path>(<role>)"]
         direction TB
-        X1["① <file path>::<method()> <what this node does><br/>② <where the inputs come from><br/>③ <what it returns / how state changes / what happens on failure>"]
+        X1["① <file path>::<method()> <what this node does><br/>② <where the inputs come from><br/>③ <what it returns / how state changes / what happens on failure>"]:::core
     end
 
     %% ==================== Output:<artifact> ====================
-    OUT1["📤 <output name><br/>① <response body/artifact> fields<br/>② <meaning of the key fields><br/>③ <how the caller uses it>"]
+    OUT1["📤 <output name><br/>① <response body/artifact> fields<br/>② <meaning of the key fields><br/>③ <how the caller uses it>"]:::out
 
     %% ==================== Edges (every one carries a concrete explanation) ====================
     IN1 -- "<who sends what to whom, and why>" --> X1
     X1  -. "<resume / dependency / bypass relationship>" .-> X2
+
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
 ```
 
 ## Key Notes
@@ -44,6 +56,39 @@ flowchart TD
 ````
 
 When the repo's documentation is in Chinese, use the Chinese headings instead (`# 项目流程图 (PROJECT_FLOW)`, `## 整体流程 (Mermaid 图)`, `## 关键说明`, `> 说明:`).
+
+## Colors
+
+Color encodes the **role** of a node, so a reader can spot "where does it touch the disk", "where does it call the model", "where can it fail" without reading any text. Assign a class to **every** node with `:::name`.
+
+| Class | Use for | Fill | Stroke | Text (`color:`) |
+|---|---|---|---|---|
+| `entry` | startup, config, entry point | `#e3f2fd` | `#1565c0` | `#0b2c4d` |
+| `iface` | routes, handlers, request intake | `#e0f2f1` | `#00695c` | `#04302b` |
+| `core` | business logic, loop nodes | `#ede7f6` | `#5e35b1` | `#2a1152` |
+| `io` | input/output, files, network | `#e8f5e9` | `#2e7d32` | `#0c3d12` |
+| `data` | storage, database, cache | `#e0f7fa` | `#00838f` | `#053b42` |
+| `ext` | external library / framework node | `#f5f5f5` | `#9e9e9e` | `#1a1a1a` |
+| `warn` | side effects, errors, fallbacks | `#fff3e0` | `#ef6c00` | `#4a2500` |
+| `out` | artifacts, responses | `#fce4ec` | `#ad1457` | `#4a0d24` |
+
+Every text/background pair measures **≥ 11:1** (WCAG AAA needs 7:1), so the labels stay readable in any theme. **`color:` is not optional**: without it the text inherits the renderer's theme color, and a dark-mode renderer paints `#ccc` on these light fills — 1.41:1, effectively invisible.
+
+Edge coloring uses `linkStyle`, which is applied inline and therefore safe. Keep the one default rule; add index-based rules only to highlight the spine or a fallback (indices are 0-based in declaration order, so keep them in sync when edges change):
+
+```text
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
+    linkStyle 0,2,4 stroke:#1565c0,stroke-width:2.5px
+    linkStyle 7 stroke:#b45309,stroke-width:2px
+```
+
+Pick edge colors that read on both light and dark pages: spine `#1565c0`, data flow `#2e7d32`, fallback/error `#b45309`, default `#6b7280`.
+
+Edge **text** is not controlled by `classDef` — it comes from theme variables. If your renderer draws it too faint, add this line directly above `flowchart TD`:
+
+```text
+%%{init: {"theme":"base","themeVariables":{"textColor":"#111111","edgeLabelBackground":"#f2f4f7"},"themeCSS":".edgeLabel rect{opacity:1 !important;fill:#f2f4f7 !important}.edgeLabel,.edgeLabel span{color:#111111 !important;background-color:#f2f4f7 !important}"}}%%
+```
 
 ## Steps
 
@@ -84,7 +129,9 @@ X1["① <path>::<Class.method()> <what this node does><br/>② <where parameters
 
 **What ②③ carry:** where parameters come from, what is returned, how state changes, what condition triggers this node, how failure degrades, what side effects occur. Use concrete values, thresholds and field names — never "processes data" or "does some work".
 
-**Boundary nodes:** start with `📥` (input) or `📤` (output), carry no method name; ① states the protocol and key fields, ② the field semantics, ③ any special switches.
+**Boundary nodes:** start with `📥` (input) or `📤` (output), carry no method name; ① states the protocol and key fields, ② the field semantics, ③ any special switches. Give them the `io` class.
+
+**Color class:** every node ends with `:::name` from the palette above. Pick by **role, not by file** — a calculation living in an API file is `core`, and the one node that writes to disk is `io` even if it sits in the middle of the flow.
 
 ### 4. Write the edges
 
@@ -115,6 +162,7 @@ Write `docs/project_flow.md` (create `docs/` if needed), overwriting any previou
 - [ ] Every method in the diagram reads `path::method()` and actually exists in the code (never invent one)
 - [ ] Every node's ① line has an action; ② onwards carries concrete detail; no filler
 - [ ] Every edge has a concrete explanation; loop back-edges and fallback paths are present
+- [ ] Every node carries a color class (`:::core`, `:::io`, …) and every `classDef` has a `color:` value
 - [ ] The Key Notes table covers every method in the diagram; 2 to 4 mechanism notes follow
 - [ ] Language matches the repo's documentation language
 
@@ -130,32 +178,39 @@ Write `docs/project_flow.md` (create `docs/` if needed), overwriting any previou
 
 ```mermaid
 flowchart TD
+    %% ---- color classes ----
+    classDef entry fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0b2c4d
+    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
+    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
+    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
+    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+
     %% ==================== Input:client request ====================
-    IN1["📥 Client request<br/>① POST /calc carries JSON:{user, expr, purge}<br/>② user is the memory isolation unit (one conversation per user)<br/>③ purge=true clears that user's memory before starting a new conversation"]
+    IN1["📥 Client request<br/>① POST /calc carries JSON:{user, expr, purge}<br/>② user is the memory isolation unit (one conversation per user)<br/>③ purge=true clears that user's memory before starting a new conversation"]:::io
 
     %% ==================== Entry:process startup (once per process) ====================
     subgraph SUB_MAIN["main.py(entry point)"]
         direction TB
-        L1["① (module level) main.py::load_dotenv()<br/>② writes .env into environment variables (once per process)<br/>③ runs before importing business modules so config is ready first"]
-        M1["① main.py::main()<br/>② os.getenv reads APP_HOST / APP_PORT / APP_RELOAD<br/>③ calls uvicorn.run('main:app') to start the server"]
+        L1["① (module level) main.py::load_dotenv()<br/>② writes .env into environment variables (once per process)<br/>③ runs before importing business modules so config is ready first"]:::entry
+        M1["① main.py::main()<br/>② os.getenv reads APP_HOST / APP_PORT / APP_RELOAD<br/>③ calls uvicorn.run('main:app') to start the server"]:::entry
     end
 
     %% ==================== Interface:receive and orchestrate ====================
     subgraph SUB_APP["api/app.py(interface)"]
         direction TB
-        A1["① api/app.py::calculate() receives the body<br/>② the Query model validates user/expr/purge<br/>③ maps user onto a thread_id and hands it to the graph"]
-        A2["① api/app.py::health() liveness probe<br/>② GET /health, touches neither memory nor model<br/>③ returns {status: ok}"]
+        A1["① api/app.py::calculate() receives the body<br/>② the Query model validates user/expr/purge<br/>③ maps user onto a thread_id and hands it to the graph"]:::iface
+        A2["① api/app.py::health() liveness probe<br/>② GET /health, touches neither memory nor model<br/>③ returns {status: ok}"]:::iface
     end
 
     %% ==================== Core:calculation loop ====================
     subgraph SUB_CORE["core/calc.py(expression evaluation)"]
         direction TB
-        C1["① core/calc.py::Calculator.evaluate() evaluates<br/>② expr is the expression string to evaluate<br/>③ returns a number or symbolic expression (e.g. 3*x**2); a syntax error becomes ValueError"]
-        C2["① core/calc.py::Calculator.history() reads history<br/>② fetches the most recent rows for this thread_id<br/>③ feeds the previous turns back into the next prompt"]
+        C1["① core/calc.py::Calculator.evaluate() evaluates<br/>② expr is the expression string to evaluate<br/>③ returns a number or symbolic expression (e.g. 3*x**2); a syntax error becomes ValueError"]:::core
+        C2["① core/calc.py::Calculator.history() reads history<br/>② fetches the most recent rows for this thread_id<br/>③ feeds the previous turns back into the next prompt"]:::core
     end
 
     %% ==================== Output:HTTP response ====================
-    OUT1["📤 Final response<br/>① Response JSON:{user, result, reply}<br/>② result = a number or symbolic expression (e.g. 3*x**2)<br/>③ reply = the natural-language answer shown to the user"]
+    OUT1["📤 Final response<br/>① Response JSON:{user, result, reply}<br/>② result = a number or symbolic expression (e.g. 3*x**2)<br/>③ reply = the natural-language answer shown to the user"]:::out
 
     %% ==================== Edges (every one carries a concrete explanation) ====================
     IN1 -- "an HTTP POST carrying the JSON body {user, expr, purge} reaches the server" --> A1
@@ -168,6 +223,9 @@ flowchart TD
     C1  -- "on ValueError, record the error on the history side so the next turn can correct it" --> C2
     C2  -- "with the previous context loaded, return to evaluation and recompute (loop)" --> C1
     C1  -- "once evaluated, assemble result and reply into the response" --> OUT1
+
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
+    linkStyle 8 stroke:#b45309,stroke-width:2.5px
 ```
 
 ## Key Notes
@@ -198,6 +256,4 @@ flowchart TD
 7. Declare a node once, inside its own subgraph — referencing it inside another subgraph silently **moves** it there.
 8. Edge labels never wrap (`white-space: nowrap`); break long ones with `<br/>` yourself.
 
-> Optional: if a dark-mode renderer leaves edge text too faint, add this line above `flowchart TD` to pin the edge label foreground/background pair:
-> `%%{init: {"theme":"base","themeVariables":{"textColor":"#111111","edgeLabelBackground":"#f2f4f7"}},"themeCSS":".edgeLabel rect{opacity:1 !important;fill:#f2f4f7 !important}.edgeLabel,.edgeLabel span{color:#111111 !important;background-color:#f2f4f7 !important}"}}%%`
-> It is deliberately **not** part of the default output.
+> Color classes, edge colors, and the optional fix for faint edge text live in the **Colors** section above.

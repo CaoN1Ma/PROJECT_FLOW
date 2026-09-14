@@ -16,24 +16,30 @@ Point your agent at a repository. ProjectFlow reads the code and writes `docs/pr
 
 ```mermaid
 flowchart TD
+    %% ---- color classes: node fill, border and text color ----
+    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
+    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
+    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
+    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+
     %% ==================== Input:client request ====================
-    IN1["📥 Client request<br/>① POST /calc carries JSON:{user, expr, purge}<br/>② user is the memory isolation unit<br/>③ purge=true clears that user's memory first"]
+    IN1["📥 Client request<br/>① POST /calc carries JSON:{user, expr, purge}<br/>② user is the memory isolation unit<br/>③ purge=true clears that user's memory first"]:::io
 
     %% ==================== Interface:receive and orchestrate ====================
     subgraph SUB_APP["api/app.py(interface)"]
         direction TB
-        A1["① api/app.py::calculate() receives the body<br/>② the Query model validates user/expr/purge<br/>③ maps user onto a thread_id and hands it to the graph"]
+        A1["① api/app.py::calculate() receives the body<br/>② the Query model validates user/expr/purge<br/>③ maps user onto a thread_id and hands it to the graph"]:::iface
     end
 
     %% ==================== Core:calculation loop ====================
     subgraph SUB_CORE["core/calc.py(expression evaluation)"]
         direction TB
-        C1["① core/calc.py::Calculator.evaluate() evaluates<br/>② expr is the expression string to evaluate<br/>③ returns a number or symbolic expression; a syntax error becomes ValueError"]
-        C2["① core/calc.py::Calculator.history() reads history<br/>② fetches the most recent rows for this thread_id<br/>③ feeds the previous turns back into the next prompt"]
+        C1["① core/calc.py::Calculator.evaluate() evaluates<br/>② expr is the expression string to evaluate<br/>③ returns a number or symbolic expression; a syntax error becomes ValueError"]:::core
+        C2["① core/calc.py::Calculator.history() reads history<br/>② fetches the most recent rows for this thread_id<br/>③ feeds the previous turns back into the next prompt"]:::core
     end
 
     %% ==================== Output:HTTP response ====================
-    OUT1["📤 Final response<br/>① Response JSON:{user, result, reply}<br/>② result = a number or symbolic expression<br/>③ reply = the natural-language answer shown to the user"]
+    OUT1["📤 Final response<br/>① Response JSON:{user, result, reply}<br/>② result = a number or symbolic expression<br/>③ reply = the natural-language answer shown to the user"]:::out
 
     %% ==================== Edges (every one carries a concrete explanation) ====================
     IN1 -- "an HTTP POST carrying the JSON body reaches the server" --> A1
@@ -42,7 +48,12 @@ flowchart TD
     C1  -- "on ValueError, record the error on the history side so the next turn can correct it" --> C2
     C2  -- "with the previous context loaded, return to evaluation and recompute (loop)" --> C1
     C1  -- "once evaluated, assemble result and reply into the response" --> OUT1
+
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
+    linkStyle 4 stroke:#b45309,stroke-width:2.5px
 ```
+
+Node color encodes the role — startup, interface, core logic, I/O, artifact — and each color carries its own text color, so labels stay readable whatever theme your renderer uses.
 
 Under the diagram it writes a **Key Notes** table (one row per method) and a few **mechanism notes** covering what a diagram cannot show — how the loop terminates, how memory resumes, what happens when a dependency is down.
 
@@ -56,6 +67,7 @@ Under the diagram it writes a **Key Notes** table (one row per method) and a few
 | Fallbacks | omitted | drawn, e.g. "Milvus unavailable → in-memory fallback" |
 | Order | directory order | the order a request actually travels |
 | Language | whatever the tool emits | follows your repo's documentation language |
+| Color | none, or one color for everything | node color encodes its **role** (startup / interface / core / I/O / artifact); every text-on-background pair is contrast-checked (≥ 11:1) |
 
 ## Install
 

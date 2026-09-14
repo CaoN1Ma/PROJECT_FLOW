@@ -16,24 +16,30 @@
 
 ```mermaid
 flowchart TD
+    %% ---- 配色类:底色 / 描边 / 文字色三件套 ----
+    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
+    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
+    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
+    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+
     %% ==================== 输入:客户端请求 ====================
-    IN1["📥 客户端请求<br/>① POST /calc 携带 JSON:{user, expr, purge}<br/>② user 是记忆隔离单位(一个用户一条对话)<br/>③ purge=true 表示先清空该用户记忆再开新对话"]
+    IN1["📥 客户端请求<br/>① POST /calc 携带 JSON:{user, expr, purge}<br/>② user 是记忆隔离单位(一个用户一条对话)<br/>③ purge=true 表示先清空该用户记忆再开新对话"]:::io
 
     %% ==================== 接口层:接收与编排 ====================
     subgraph SUB_APP["api/app.py(接口层)"]
         direction TB
-        A1["① api/app.py::calculate() 接收请求体<br/>② Query 模型自动校验 user/expr/purge 格式<br/>③ 把 user 映射成 thread_id 交给图执行"]
+        A1["① api/app.py::calculate() 接收请求体<br/>② Query 模型自动校验 user/expr/purge 格式<br/>③ 把 user 映射成 thread_id 交给图执行"]:::iface
     end
 
     %% ==================== 核心:计算循环 ====================
     subgraph SUB_CORE["core/calc.py(表达式计算)"]
         direction TB
-        C1["① core/calc.py::Calculator.evaluate() 求值<br/>② 入参 expr 是待算表达式字符串<br/>③ 返回数值或符号表达式;语法错转 ValueError 回传"]
-        C2["① core/calc.py::Calculator.history() 取历史<br/>② 按 thread_id 取该用户最近若干条记录<br/>③ 供下一轮把上文拼进提示词"]
+        C1["① core/calc.py::Calculator.evaluate() 求值<br/>② 入参 expr 是待算表达式字符串<br/>③ 返回数值或符号表达式;语法错转 ValueError 回传"]:::core
+        C2["① core/calc.py::Calculator.history() 取历史<br/>② 按 thread_id 取该用户最近若干条记录<br/>③ 供下一轮把上文拼进提示词"]:::core
     end
 
     %% ==================== 输出:HTTP 响应 ====================
-    OUT1["📤 最终响应<br/>① Response JSON:{user, result, reply}<br/>② result = 数值或符号表达式(如 3*x**2)<br/>③ reply = 给用户看的自然语言回复"]
+    OUT1["📤 最终响应<br/>① Response JSON:{user, result, reply}<br/>② result = 数值或符号表达式(如 3*x**2)<br/>③ reply = 给用户看的自然语言回复"]:::out
 
     %% ==================== 连线(全部带具体说明) ====================
     IN1 -- "携带 JSON 请求体的 HTTP POST 请求发往服务器" --> A1
@@ -42,7 +48,12 @@ flowchart TD
     C1  -- "算错(ValueError)时把错误记到历史侧,便于下一轮纠正" --> C2
     C2  -- "带着上文回到求值节点,重新计算(循环)" --> C1
     C1  -- "算完把 result 与 reply 一起组装成响应" --> OUT1
+
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
+    linkStyle 4 stroke:#b45309,stroke-width:2.5px
 ```
+
+**颜色按职责走，不按文件走**：启动/配置蓝、接口层青、核心逻辑紫、输入输出绿、产物粉；每个配色的文字与底色对比度都 ≥ 11:1（WCAG AAA 要求 7:1），所以标签在任何主题下都读得清。
 
 图下面还会写一张 **「关键说明」表格**（图里每个方法一行）和 **2~4 条机制说明**，专门讲图上看不出来的东西 —— 循环靠什么停、记忆怎么续上、依赖挂了怎么办。
 
@@ -56,6 +67,7 @@ flowchart TD
 | 降级路径 | 省略 | 画出来，例如「Milvus 不可用→内存兜底」 |
 | 顺序 | 按目录 | 按请求**实际流经**的顺序 |
 | 语种 | 工具输出什么就是什么 | 跟随你仓库的文档语言 |
+| 配色 | 没有，或者全图一个色 | 节点颜色编码**职责**（启动 / 接口 / 核心 / 输入输出 / 产物），且每对文字与底色都验过对比度（≥ 11:1） |
 
 ## 安装
 
