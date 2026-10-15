@@ -1,6 +1,9 @@
 # Local agent / harness state — contains session data, never publish it
 .dsh
 
+# Temp AST-analysis scripts written by the project-flow skill (deleted after each run)
+temp/
+
 # OS noise
 .DS_Store
 Thumbs.db

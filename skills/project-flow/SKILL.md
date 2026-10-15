@@ -1,11 +1,168 @@
 ---
 name: project-flow
-description: "Draw a project's execution flow as a Mermaid diagram: read the code, then write docs/project_flow.md — one `flowchart TD` that goes 📥 input → one subgraph per file → 📤 output, where every node's ① line names the real code path (`api/app.py::Router.get_user()`) plus what it does, ②③ carry parameters/state/triggers, every edge states what is passed and why, and loop back-edges and fallback paths are drawn rather than omitted. Closes with a key-notes table and mechanism notes. Also triggers on 画项目流程图 / PROJECT_FLOW / 执行链路 / 项目结构图 / 看懂项目怎么跑起来."
+description: "Module-level project map for newcomers, plus an on-demand request-flow trace — reads the code (AST-first), then writes docs/project_overview.md: one Mermaid flowchart where every module is a role-colored node in layer subgraphs, solid edges show who imports/calls whom (labelled with the symbols passed), dashed edges show which way data moves, entry 📍 / data 🗄️ / output 📤, main path highlighted; beneath it a newcomer reading guide, a catalog row for every source file, and data-flow notes. On request for one concrete run/endpoint/CLI command, writes docs/project_flow.md instead: 📥 input → one subgraph per file → 📤 output, methods annotated, edges explained, loops drawn. Triggers on: 模块图, 项目结构图, 项目地图, 模块依赖, 数据流向, 新人导读, 新人上手, 看懂项目, 每个文件是干嘛的, 谁调用谁, onboarding, project map, module diagram, architecture overview, project structure, data flow, 画项目流程图, PROJECT_FLOW, 执行链路, 请求流程, 调用链, call chain, how does this project run."
 ---
 
-Produce `docs/project_flow.md`: a single Mermaid flowchart that traces the project from entry point to output, plus a key-notes table underneath.
+# ProjectFlow
 
-## Document skeleton (follow this structure)
+One analysis pass, two deliverables.
+
+1. **Module overview (default)** → `docs/project_overview.md`: a module-level Mermaid map for people meeting the project for the first time. Every module is one role-colored node inside its layer subgraph; solid edges show who imports/calls whom (labelled with the concrete symbols passed); dashed edges show which way data moves (or where fallbacks run); the main path is highlighted in blue. Under the map: a **reading guide** (numbered steps anchored to real `file::symbol()`), a **File Catalog** with one row per source file, and **Data Flow** notes.
+2. **Request flow (on demand)** → `docs/project_flow.md`: the original contract — one `flowchart TD` tracing a single request from 📥 input → one subgraph per file → 📤 output, every method annotated, every edge explained, loops and fallbacks drawn.
+
+Why this order: a newcomer first needs *"what exists and how it fits together"* (module level) and only then *"how one request travels"* (flow level). The module map answers — what does each file do, how do files reference each other, and where does data flow — without drowning in per-method detail.
+
+## §0 Mode router (decide before reading the code)
+
+| Mode | The request asks for… | Output |
+|---|---|---|
+| `overview` (default) | project structure, module map, what each file does, who calls whom, where data flows, onboarding — 模块图 / 项目结构图 / 项目地图 / 模块依赖 / 数据流向 / 新人导读 / 看懂项目 / project structure / module diagram / architecture overview / map the project | `docs/project_overview.md` |
+| `flow` | the path of ONE concrete request/run through the code: an endpoint, `main()`, a CLI command, a message — 执行链路 / 请求流程 / 调用链 / trace the flow / how does this project run | `docs/project_flow.md` |
+
+Default to `overview`. Switch to `flow` only when the request names a specific entry to trace. A bare "draw the project flow / 画项目流程图" now means `overview` — the module map is the skill's front door; name a request for the flow view.
+
+## §1 Analysis phase (both modes — AST-first, before writing anything)
+
+Systematically discover the codebase with AST parsing:
+
+- **Python**: `ast` module — classes, functions, decorators, imports, call sites
+- **JavaScript/TypeScript**: `ts-morph` or `babel/parser` — exports, declarations, class methods, imports
+- **Other languages**: language-appropriate AST parser
+
+**Required discovery outputs** (temp JSON, see §10):
+
+- `entry_points`: `[{file, function/class, role}]` — `main()`, handlers, CLI commands, HTTP routes
+- `file_roles`: file → `entry | iface | core | data | io | ext` (rules below; first match wins)
+- `import_graph`: directed file → file edges `{from_file, to_file, symbols[], call_type}` for imports/calls **between project files**
+- `external_deps`: imports from outside the project, tagged `stdlib` or `ext`
+- `data_stores`: modules touching DB / cache / queue / file store / external API (see §2 M6)
+- `loop_edges`: cycles in the graph (SCCs with > 1 node, or self-loops)
+
+File-role rules, in priority order:
+
+1. `entry` — contains the process entry (`if __name__ == "__main__"`, `main()`, `@click`, `bin` in package.json) or loads startup config
+2. `iface` — HTTP routes, handlers, middleware, GraphQL resolvers, gRPC services, message consumers
+3. `core` — business logic, algorithms, state machines, orchestration
+4. `data` — DB/ORM/cache clients, repositories, DAOs
+5. `io` — file read/write, HTTP clients, message queue producers/consumers
+6. `ext` — thin wrappers around an external SDK/framework
+
+Entry-point patterns: Python `if __name__ == "__main__"`, `main()`, `@app.route`, FastAPI, `typer`, `argparse`, `click`; JS/TS `export default`, `export function`, `app.get/post`, `createServer`, CLI `bin` in `package.json`; other languages, their conventional entry markers.
+
+**Primary entry** (drives `EN1` and the reading guide): when several modules qualify as `entry`, the primary is the one importing the most other modules — the wiring module references the widest graph; ties break by module path, alphabetically.
+
+**No-parser fallback** (keeps the skill usable on a bare machine): if the language has no AST tool available — no `python3` for Python, no `ts-morph` or `babel/parser` for JS/TS, no toolchain for other languages — scan import/require statements with regex, read each file's top-level symbols by eye, and disclose the method in the document's mechanism notes (`> Discovery method: import-scan fallback — no AST parser available`). The module map stays valid; only per-symbol detail may be shallower.
+
+## §2 Module extraction (overview mode only)
+
+A **module** is the unit a newcomer can hold in their head: one directory/package, summarized in one node.
+
+- **M1 — build**: every directory that contains source files is a module. Each repo-root file is its own singleton module.
+- **M2 — role**: a module's role = the highest-priority role among its files (`entry > iface > core > data > io > ext`).
+- **M3 — cap at 12 primary modules** (past ~12 nodes a map stops being glanceable). While modules > 12: merge the alphabetically-first pair of sibling modules sharing a parent directory into a single module named after that parent directory (all files and their paths are kept); when the shared parent is the repo root, merge the pair into the alphabetically-first module of the two instead. Repeat until ≤ 12 remain. Merged files stay visible in the File Catalog — the cap shrinks the map, never the catalog.
+- **M4 — single module**: skip layer subgraphs entirely; draw bare nodes.
+- **M5 — reference edges**: aggregate `import_graph` file edges into module edges. Label = the up-to-3 most-imported symbols on that edge (by frequency, then alphabetical), plus why the caller needs them.
+- **M6 — data nodes**: every `data_stores` target (database, cache, queue, file store, third-party service) becomes a `:::data` or `:::ext` node — *where does data live* is a newcomer's first question, so it must be on the map.
+- **M7 — plain libraries are not nodes**: third-party libraries with no runtime boundary (lodash, pydantic) are listed in a one-line "not drawn" note, not as nodes.
+
+## §3 Document skeleton — overview mode (default)
+
+````markdown
+# Project Overview (PROJECT_FLOW)
+
+> Project: <name> — <one line: what it is, main stack, and the one main path, e.g. "FastAPI calculator: HTTP → validation → evaluation → JSON response">
+> Start reading here: `<entry file>::<fn>()` — <why it is the front door>
+
+## Module Map (Mermaid)
+
+Legend: solid arrow `-->` = code reference (A imports/calls B); dashed arrow `-.->` = data movement (rows/requests flow in the arrow's direction) or a fallback path.
+
+```mermaid
+flowchart TD
+    %% ---- color classes: copy verbatim, every one needs color: ----
+    classDef entry fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0b2c4d
+    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
+    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
+    classDef data  fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#053b42
+    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
+    classDef ext   fill:#f5f5f5,stroke:#9e9e9e,stroke-width:2px,color:#1a1a1a
+    classDef warn  fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#4a2500
+    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+
+    %% ==================== Entry:how the project starts ====================
+    subgraph SUB_ENTRY["entry · 启动层"]
+        direction TB
+        EN1["📍 <module name> — startup<br/>① <files>::<entry()> <what it starts><br/>② <what it loads: config, wiring, routes><br/>③ <what it hands off first>"]:::entry
+    end
+
+    %% ==================== <layer name>:what this layer does ====================
+    subgraph SUB_IFACE["interface · 接口层"]
+        direction TB
+        IF1["<module name><br/>① <files>::<key()> <the module's main job><br/>② <who calls it / what it receives><br/>③ <what it exposes or returns>"]:::iface
+    end
+
+    %% ==================== Core:business logic ====================
+    subgraph SUB_CORE["core · 业务层"]
+        direction TB
+        CO1["<module name><br/>① <files>::<Class.key()> <the module's main job><br/>② <who calls it / what it receives><br/>③ <what it computes or decides>"]:::core
+    end
+
+    %% ==================== Data:where data lives ====================
+    subgraph SUB_DATA["data · 数据层"]
+        direction TB
+        SO1["<storage module name><br/>① <files>::<key()> <what it persists and how><br/>② <tables / keys / queues it owns><br/>③ <failure mode: connection error → ?>"]:::data
+        DA1["🗄️ <PostgreSQL / Redis / S3><br/>① <written by: which modules, what><br/>② <key tables / keys / buckets><br/>③ <read by: which modules, why>"]:::data
+    end
+
+    %% ==================== External:systems we call ====================
+    subgraph SUB_EXT["external · 外部依赖"]
+        direction TB
+        EX1["☁️ <Stripe / OpenAI / Slack><br/>① <called by: which module><br/>② <endpoint or SDK call><br/>③ <failure mode: timeout → fallback>"]:::ext
+    end
+
+    %% ==================== Output:what the project produces ====================
+    OUT1["📤 <main artifact or response><br/>① <fields><br/>② <meaning of key fields><br/>③ <who consumes it>"]:::out
+
+    %% ==================== Edges:solid = reference, dashed = data ====================
+    EN1 -- "<caller> imports <symbol>() to <why>" --> IF1
+    IF1 -- "<symbol>() is passed to <next module> for <why>" --> CO1
+    CO1 -. "writes <rows/keys> to <table>" .-> SO1
+    SO1 -. "stores <rows/keys> in <PostgreSQL>" .-> DA1
+    DA1 -. "supplies <rows/keys> for <purpose>" .-> CO2
+    IF1 -. "fallback:<degraded path when X is down>" .-> EX1
+
+    linkStyle default stroke:#6b7280,stroke-width:1.5px
+    linkStyle <spine indices, e.g. 0,1,6> stroke:#1565c0,stroke-width:2.5px
+    linkStyle <fallback indices> stroke:#b45309,stroke-width:2px
+```
+
+> External libraries (not drawn — no runtime boundary): <pydantic, lodash, …>
+
+## How to read this codebase (新人导读)
+
+1. **Start**: `<file>::<fn>()` — <what happens first>
+2. **Follow the spine**: `<module>` → `<module>` — <the main path>
+3. **Data**: <where data is born, transformed, stored, consumed>
+4. **Edges and fallback**: <what breaks gracefully, and into what>
+
+## File Catalog
+
+| # | File | Role | Key symbols | What it does |
+|---|---|---|---|---|
+| 1 | `<src/entry.py>` | entry | `<main()>, <load_config()>` | <one line: why this file exists> |
+
+> Excluded from this map: <tests, generated, vendored files — state which and why>
+
+## Data Flow
+
+> <2–4 lines: where data enters, how each module transforms it in order, where it is stored, what leaves the project>
+
+> <Mechanism: loop / memory / fallback / thresholds — what a static map cannot show, 2–4 lines>
+````
+
+Chinese-heading variant (use when the repo's docs are Chinese): `# 项目全景图 (PROJECT_FLOW)`, `## 模块地图 (Mermaid 图)`, `## 新人导读`, `## 文件目录`, `## 数据流向`, `> 图例:`, `> 外部库(未画出):`.
+
+## §4 Document skeleton — flow mode
 
 ````markdown
 # Project Flow (PROJECT_FLOW)
@@ -55,20 +212,20 @@ flowchart TD
 > <Mechanism>:<loop, memory, fallback, thresholds — 2 to 4 lines>
 ````
 
-When the repo's documentation is in Chinese, use the Chinese headings instead (`# 项目流程图 (PROJECT_FLOW)`, `## 整体流程 (Mermaid 图)`, `## 关键说明`, `> 说明:`).
+Chinese-heading variant: `# 项目流程图 (PROJECT_FLOW)`, `## 整体流程 (Mermaid 图)`, `## 关键说明`.
 
-## Colors
+## §5 Colors
 
 Color encodes the **role** of a node, so a reader can spot "where does it touch the disk", "where does it call the model", "where can it fail" without reading any text. Assign a class to **every** node with `:::name`.
 
 | Class | Use for | Fill | Stroke | Text (`color:`) |
 |---|---|---|---|---|
-| `entry` | startup, config, entry point | `#e3f2fd` | `#1565c0` | `#0b2c4d` |
+| `entry` | startup, config, entry point, the entry module | `#e3f2fd` | `#1565c0` | `#0b2c4d` |
 | `iface` | routes, handlers, request intake | `#e0f2f1` | `#00695c` | `#04302b` |
 | `core` | business logic, loop nodes | `#ede7f6` | `#5e35b1` | `#2a1152` |
 | `io` | input/output, files, network | `#e8f5e9` | `#2e7d32` | `#0c3d12` |
-| `data` | storage, database, cache | `#e0f7fa` | `#00838f` | `#053b42` |
-| `ext` | external library / framework node | `#f5f5f5` | `#9e9e9e` | `#1a1a1a` |
+| `data` | storage, database, cache, storage modules | `#e0f7fa` | `#00838f` | `#053b42` |
+| `ext` | external library / framework / third-party service | `#f5f5f5` | `#9e9e9e` | `#1a1a1a` |
 | `warn` | side effects, errors, fallbacks | `#fff3e0` | `#ef6c00` | `#4a2500` |
 | `out` | artifacts, responses | `#fce4ec` | `#ad1457` | `#4a0d24` |
 
@@ -90,170 +247,216 @@ Edge **text** is not controlled by `classDef` — it comes from theme variables.
 %%{init: {"theme":"base","themeVariables":{"textColor":"#111111","edgeLabelBackground":"#f2f4f7"},"themeCSS":".edgeLabel rect{opacity:1 !important;fill:#f2f4f7 !important}.edgeLabel,.edgeLabel span{color:#111111 !important;background-color:#f2f4f7 !important}"}}%%
 ```
 
-## Steps
+## §6 Deterministic ordering rules (for cross-run/model consistency)
 
-### 1. Find the entry point and the output
+### Overview mode
 
-Read `README`, `AGENTS.md`, startup scripts, and the `main`/`app`/`cmd` directories to establish: the **entry point** (what the outside world triggers), the **output** (what the response or artifact looks like), and the **external dependencies** (models, databases, third-party APIs). If there is no obvious entry, work backwards from the method nobody calls.
+**Layer order** (fixed, top to bottom): `entry` → `iface` → `core` → `data` → `io` → `ext`; `IN1`/`IO1` (a distinct inbound source, e.g. a queue, when one exists) sits right after the entry layer; `OUT1` is last. Only layers that contain nodes get a subgraph.
 
-### 2. Layer by execution order, not by directory
+**Node IDs**: layer prefix + sequence, in order of appearance in the final diagram: `EN1`, `IF1`, `IF2`, `CO1`, `SO1` (storage modules) / `DA1` (stores), `IO1`, `EX1`, `OUT1`.
 
-The subgraph order is the order a request travels, **not** alphabetical directory order:
+**Within a layer**: BFS distance from `EN1` over the aggregated module reference edges (forward direction); unreachable modules come after reachable ones, ordered among themselves by module path alphabetically. Ties break by module path alphabetically.
 
-```
-input → entry (startup/config) → interface (routes/handlers) → orchestration (main flow/state machine)
-      → core loop (think ⇄ act) → support (model factory, tool registry, storage) → output
-```
+**Spine** (the blue path a newcomer should trace first): BFS over **solid** reference edges from `EN1` to `OUT1`; when expanding a frontier, prefer neighbors in layer order `iface < core < data < io < ext`, then alphabetically. The first path found is the spine; its edge indices get the `#1565c0` `linkStyle` rule.
 
-Use **one subgraph per file** — closely related small files may share one subgraph, listing them in the title with `, `. Titles carry the **project-relative path plus a role**: `subgraph SUB_APP["api/app.py(interface)"]`. Wherever a loop exists (agent ⇄ tools), the **back-edge must be drawn**.
+**Edge declaration order** (makes `linkStyle` indices predictable): DFS from `EN1` visiting neighbors sorted by node ID, then remaining data edges (sorted by source ID, then target), then fallback/loop edges (sorted the same way).
 
-### 3. Write the nodes
+**Data-edge direction**: an edge points the way the **data moves** — writes go module → store (`CO1 -. "writes" .-> DA1`), reads go store → module (`DA1 -. "supplies" .-> CO1`). External-service calls go module → ext node.
 
-Node ids are **short mnemonics plus a number**: derive them from the role (`IN1`/`OUT1`/`M1`/`APP1`/`MEM1`/`AG1`/`RT1`/`TL1`/`RS1`/`LLM1`…). The boundaries are always `IN1` and `OUT1`.
+**Dotted edges** carry: data movement, fallback paths (`fallback:` label prefix), and module reference cycles (`(mutual reference)` / `(loop)` prefix — each direction of the cycle drawn once). Solid edges are plain code references.
 
-Label structure (separated by `<br/>`; use 2 to 4 numbered lines, extending to ④⑤ when there is more to say):
+### Flow mode
 
-```
-X1["① <path>::<Class.method()> <what this node does><br/>② <where parameters/inputs come from><br/>③ <what it returns / how state changes / fallback on failure>"]
-```
+**Subgraph order** = execution order of a single request:
+1. `entry` — startup/config (module-level code, `main()`, config loading)
+2. `iface` — request intake (routes, handlers, middleware)
+3. `core` — business logic, loops, state machines
+4. `data` — storage, database, cache access
+5. `io` — file/network I/O (distinct from data layer)
+6. `ext` — external library/framework nodes
+7. `out` — response/artifact assembly
 
-**How to write the location in line ①:**
+**Within a file**: order methods by first call in execution flow (topological sort of call graph restricted to that file). If ambiguous, use alphabetical by method name.
 
-| Case | Form |
-|---|---|
-| Module-level function | `api/app.py::calculate()` |
-| Method on a class | `agent/memory.py::MilvusCheckpointer.get_tuple()` |
-| Module-level statement | `(module level) main.py::load_dotenv()` |
-| Graph node / framework node | `agent/graph.py::compress node (agent/summarizer.py) entry` |
-| Something from an external library | `langgraph ToolNode execution (mounted in agent/graph.py)` |
+**Node IDs**: `IN1`, `OUT1`, `EN1`, `IF1`, `CO1`, `DA1`, `IO1`, `EX1`, `WN1`; sequence number = order of appearance in the final diagram.
 
-**What ②③ carry:** where parameters come from, what is returned, how state changes, what condition triggers this node, how failure degrades, what side effects occur. Use concrete values, thresholds and field names — never "processes data" or "does some work".
+**Edge order**: declare edges in the same order as nodes are visited in a depth-first traversal from `IN1`.
 
-**Boundary nodes:** start with `📥` (input) or `📤` (output), carry no method name; ① states the protocol and key fields, ② the field semantics, ③ any special switches. Give them the `io` class.
+## §7 Node label canonicalization
 
-**Color class:** every node ends with `:::name` from the palette above. Pick by **role, not by file** — a calculation living in an API file is `core`, and the one node that writes to disk is `io` even if it sits in the middle of the flow.
+### Overview mode
 
-### 4. Write the edges
+- **Module node, line ①**: `<up to 3 files, + -joined>::<dominant symbol()> <the module's one job>`
+- **Line ②** (input side): `<- who calls it / what it receives`
+- **Line ③** (output side): `-> what it exposes, returns, or hands off`
+- **Inbound source node** (`IN1`, `📥`, optional — only when inputs arrive through a channel that is not the entry module, e.g. a queue or cron): ① source (protocol/endpoint), ② key fields, ③ which module consumes it
+- **Store module** (`SO1`): ① what it persists and how, ② tables/keys/queues it owns, ③ failure mode
+- **Data node** (`DA1`, `🗄️`): ① written by (which modules, what), ② key tables/keys/buckets, ③ read by (which modules, why)
+- **External node** (`EX1`, `☁️`): ① called by which module, ② endpoint or SDK call, ③ failure mode → fallback
+- **Entry node** (`EN1`, `📍`): ① `<entry()> <what it starts>`, ② what it loads (config, wiring, routes), ③ what it hands off first
+- **Output node** (`OUT1`, `📤`): ① artifact fields, ② meaning of key fields, ③ who consumes it
 
-Three forms — and **every edge must say what is passed, why, and under what condition**. Long labels are fine:
+### Flow mode
 
-```text
-A -- "main path: who hands what to whom" --> B
-A -. "resume / dependency / bypass / compile-time choice" .-> B
-A == "data flow: batch or persist" ==> B
-```
+Line ① format (exactly):
+- Module function: `file.py::func_name()`
+- Class method: `file.py::ClassName.method_name()`
+- Module-level stmt: `(module level) file.py::stmt_description`
+- Graph/framework node: `file.py::node_type node_name (source_file) entry`
+- External lib: `library_name NodeType execution (mounted in file.py)`
 
-- Always draw loop back-edges and say so in the label ("back to X to continue (loop)")
-- Always draw fallback paths, e.g. "Milvus unavailable → in-memory fallback"
-- Inside an edge label, wrap literal strings in 「」 or single quotes — never double quotes, which delimit the label itself
+Both modes, lines ②③: use concrete field names, types, error types. Never "processes data".
 
-### 5. After the diagram
+## §8 Edge label canonicalization
 
-- **Stage banners**: precede each stage with `%% ==================== <stage name>:<what> ====================`. `%%` comments must sit on their own line.
-- **Key Notes table**: `Step | file::Class.method / function | Purpose`. **Every method that appears in the diagram gets a row**; the purpose column says what problem it solves.
-- **Mechanism notes**: 2 to 4 `>` lines covering what the diagram cannot show — how the loop terminates, how memory resumes, how history is compressed, what happens when a dependency is down.
+### Overview mode
 
-### 6. Write the file and self-check
+- **Solid** (reference): `A -- "<caller> imports/calls <symbol>() to <why>" --> B`
+- **Dotted — write**: `A -. "writes <rows/keys> to <store>" .-> B`
+- **Dotted — read**: `B -. "supplies <rows/keys> for <purpose>" .-> A`
+- **Dotted — external call**: `A -. "calls <endpoint> to <why>" .-> EX1`
+- **Dotted — fallback**: `A -. "fallback:<degraded path when X is down>" .-> B`
+- **Dotted — cycle**: `A -. "(mutual reference) <what bounces between them>" .-> B`
 
-Write `docs/project_flow.md` (create `docs/` if needed), overwriting any previous version.
+### Flow mode
 
-- [ ] The diagram parses: starts with `flowchart TD`, every `subgraph` has a matching `end`
-- [ ] Subgraph order follows execution order; methods inside a file follow call order
-- [ ] Every method in the diagram reads `path::method()` and actually exists in the code (never invent one)
-- [ ] Every node's ① line has an action; ② onwards carries concrete detail; no filler
-- [ ] Every edge has a concrete explanation; loop back-edges and fallback paths are present
-- [ ] Every node carries a color class (`:::core`, `:::io`, …) and every `classDef` has a `color:` value
-- [ ] The Key Notes table covers every method in the diagram; 2 to 4 mechanism notes follow
-- [ ] Language matches the repo's documentation language
+Format: `A -- "direction: who → what (condition)" --> B`
+- Direction: "request", "response", "data flow", "control flow", "fallback", "loop"
+- Condition: "when X", "on success", "on error: Type", "if config.Y"
+- Literal strings in 「」 (CJK) or '' (ASCII). Never "".
 
-## Worked example
+## §9 Required-elements checklists (every output must pass)
 
-````markdown
-# Project Flow (PROJECT_FLOW)
+### Overview mode
 
-> Project:Calc Service — FastAPI + multi-turn memory
-> Note: entry point is `main`; execution passes through the methods/nodes below and ends in the output.
+- [ ] All 8 color class definitions, verbatim from §5; `flowchart TD`
+- [ ] Exactly one `EN1` (📍, `:::entry`) and one `OUT1` (📤, `:::out`)
+- [ ] Every node has `:::class`; every `classDef` carries a `color:` value
+- [ ] ≤ 12 module nodes; §2 merge rule applied and disclosed in the mechanism notes if triggered
+- [ ] Every subgraph has a unique `SUB_<UPPER>` id, a `direction TB`, and a matching `end`; no empty layer subgraphs
+- [ ] Stage banner comments (`%% ==================== ... ====================`)
+- [ ] Legend line under the heading; solid/dashed semantics respected everywhere
+- [ ] Spine exists and its `linkStyle` indices match the declaration order (count edges from 0)
+- [ ] Every `data_stores` target is a node; plain libraries listed in the "not drawn" note
+- [ ] File Catalog: one row per source file, reading order = map order then alphabetical within a module; every symbol verified against the AST symbol table
+- [ ] Reading guide: every `file::symbol()` anchor exists in the code
+- [ ] Data Flow + 2–4 mechanism notes
+- [ ] Exclusions note (tests/generated/vendored) states what and why
+- [ ] Language matches repo documentation language
 
-## Overall Flow (Mermaid)
+### Flow mode
+
+- [ ] All 8 color class definitions, verbatim from §5; `flowchart TD`
+- [ ] Exactly one `IN1` (📥, `:::io`) and one `OUT1` (📤, `:::out`)
+- [ ] Every node has `:::class`; every subgraph has unique `SUB_<UPPER>` id and `end`
+- [ ] Stage banner comments (`%% ==================== ... ====================`)
+- [ ] `linkStyle default` rule present
+- [ ] Key Notes table with **every method from diagram** (one row each)
+- [ ] 2–4 mechanism notes (`> ` lines)
+- [ ] Language matches repo documentation language
+
+## §10 Temp script protocol
+
+If AST analysis needs a script:
+
+- Create in `temp/project_flow_analysis_<timestamp>.py` (or `.js`, etc.)
+- Script must output JSON to stdout
+- Read JSON, then **delete the script** before writing final output
+- Never leave temp files behind
+
+## §11 Steps
+
+### 1. Discover the codebase (AST-first, §1)
+Inventory all source files (exclude tests, `.venv`, `node_modules`, `dist`, `build`, `__pycache__`, `target`, generated files) and build the discovery JSON: symbol table, call graph, import graph, external deps, data stores, loops.
+
+### 2. Extract modules (overview only, §2)
+Apply M1–M7. Record the merge decisions you made so the self-check can audit them.
+
+### 3. Build the deterministic structure (§6)
+- Overview: fix layer order, BFS distances, node IDs, spine, edge declaration order
+- Flow: pick the primary entry point (user-facing: HTTP server, CLI), trace forward through the call graph, group nodes by file, order by first appearance
+
+### 4. Write the diagram (§3 or §4 skeleton, §7–§8 formats)
+Follow the skeleton exactly. Overview: one node per module, layer subgraphs, solid/dashed edges, spine `linkStyle`. Flow: one subgraph per file on the traced path, loop back-edges drawn dashed, fallbacks drawn dashed.
+
+### 5. Write the explanations beneath the diagram
+- Overview: reading guide (§3), File Catalog — one row per file in map order, Data Flow narrative, mechanism notes
+- Flow: Key Notes table — one row per unique `file::method()` in node-appearance order, mechanism notes covering (pick 2–4): loop termination, state/memory resumption, fallback/degradation, concurrency model, config-driven switches, retry/timeout thresholds
+
+### 6. Write the file & self-check
+Write the output file (`docs/project_overview.md` or `docs/project_flow.md`; create `docs/` if needed, overwrite previous). Then run the §9 checklist for the mode — every item must pass before handoff.
+
+## §12 Worked example (overview mode)
+
+Project: a FastAPI calculator — `main.py` (entry), `api/routes.py` (iface), `core/calc.py` + `core/history.py` (core), `store/db.py` (data), PostgreSQL behind the store.
 
 ```mermaid
 flowchart TD
-    %% ---- color classes ----
-    classDef entry fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0b2c4d
-    classDef iface fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#04302b
-    classDef core  fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#2a1152
-    classDef io    fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#0c3d12
-    classDef out   fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0d24
+    %% (classDefs copied verbatim from §5 in a real output)
 
-    %% ==================== Input:client request ====================
-    IN1["📥 Client request<br/>① POST /calc carries JSON:{user, expr, purge}<br/>② user is the memory isolation unit (one conversation per user)<br/>③ purge=true clears that user's memory before starting a new conversation"]:::io
-
-    %% ==================== Entry:process startup (once per process) ====================
-    subgraph SUB_MAIN["main.py(entry point)"]
+    %% ==================== Entry:how the project starts ====================
+    subgraph SUB_ENTRY["entry · 启动层"]
         direction TB
-        L1["① (module level) main.py::load_dotenv()<br/>② writes .env into environment variables (once per process)<br/>③ runs before importing business modules so config is ready first"]:::entry
-        M1["① main.py::main()<br/>② os.getenv reads APP_HOST / APP_PORT / APP_RELOAD<br/>③ calls uvicorn.run('main:app') to start the server"]:::entry
+        EN1["📍 main — startup<br/>① main.py::main() starts the API server<br/>② loads app/settings.py and registers routes<br/>③ hands HTTP traffic to the api module"]:::entry
     end
 
-    %% ==================== Interface:receive and orchestrate ====================
-    subgraph SUB_APP["api/app.py(interface)"]
+    %% ==================== Interface:HTTP intake ====================
+    subgraph SUB_IFACE["interface · 接口层"]
         direction TB
-        A1["① api/app.py::calculate() receives the body<br/>② the Query model validates user/expr/purge<br/>③ maps user onto a thread_id and hands it to the graph"]:::iface
-        A2["① api/app.py::health() liveness probe<br/>② GET /health, touches neither memory nor model<br/>③ returns {status: ok}"]:::iface
+        IF1["api — HTTP layer<br/>① api/routes.py::calculate() validates the request body<br/>② called by EN1 through the router<br/>③ exposes POST /calc, forwards expr to core"]:::iface
     end
 
-    %% ==================== Core:calculation loop ====================
-    subgraph SUB_CORE["core/calc.py(expression evaluation)"]
+    %% ==================== Core:business logic ====================
+    subgraph SUB_CORE["core · 业务层"]
         direction TB
-        C1["① core/calc.py::Calculator.evaluate() evaluates<br/>② expr is the expression string to evaluate<br/>③ returns a number or symbolic expression (e.g. 3*x**2); a syntax error becomes ValueError"]:::core
-        C2["① core/calc.py::Calculator.history() reads history<br/>② fetches the most recent rows for this thread_id<br/>③ feeds the previous turns back into the next prompt"]:::core
+        CO1["core — calculation<br/>① core/calc.py::Calculator.evaluate() evaluates expressions<br/>② called by IF1 with the expr string<br/>③ returns a number, or ValueError on bad syntax"]:::core
+        CO2["core — history<br/>① core/history.py::History.recent() loads prior turns<br/>② called by IF1 with thread_id<br/>③ supplies context rows for the next turn"]:::core
     end
 
-    %% ==================== Output:HTTP response ====================
-    OUT1["📤 Final response<br/>① Response JSON:{user, result, reply}<br/>② result = a number or symbolic expression (e.g. 3*x**2)<br/>③ reply = the natural-language answer shown to the user"]:::out
+    %% ==================== Data:where data lives ====================
+    subgraph SUB_DATA["data · 数据层"]
+        direction TB
+        SO1["store — persistence<br/>① store/db.py::Database.upsert() persists rows<br/>② owns tables calc_requests and calc_history<br/>③ connection failure raises DBError to the caller"]:::data
+        DA1["🗄️ PostgreSQL<br/>① written by store: requests and results<br/>② tables: calc_requests, calc_history<br/>③ read by core for history lookups"]:::data
+    end
 
-    %% ==================== Edges (every one carries a concrete explanation) ====================
-    IN1 -- "an HTTP POST carrying the JSON body {user, expr, purge} reaches the server" --> A1
-    IN1 -- "the GET /health liveness probe reaches the same server" --> A2
-    L1  -- "loaded before importing api.app so config exists when app is imported" --> A1
-    L1  -- "so that os.getenv inside main() can see the .env values" --> M1
-    M1  -- "once the server is listening, FastAPI dispatches HTTP requests to it" --> A1
-    A1  -- "happy path: hand expr to Calculator.evaluate() for evaluation" --> C1
-    A1  -. "when purge=true, read history first to decide what to clear, then start fresh" .-> C2
-    C1  -- "on ValueError, record the error on the history side so the next turn can correct it" --> C2
-    C2  -- "with the previous context loaded, return to evaluation and recompute (loop)" --> C1
-    C1  -- "once evaluated, assemble result and reply into the response" --> OUT1
+    %% ==================== Output:what the project produces ====================
+    OUT1["📤 JSON response<br/>① fields: {user, result, reply}<br/>② result = number or symbolic expression<br/>③ consumed by the HTTP client"]:::out
+
+    %% ==================== Edges:solid = reference, dashed = data ====================
+    EN1 -- "main() registers routes from api/routes.py to expose POST /calc" --> IF1
+    IF1 -- "calculate() forwards expr to Calculator.evaluate() to compute the answer" --> CO1
+    IF1 -- "calculate() asks History.recent() for prior turns" --> CO2
+    CO1 -. "writes calc_requests rows to the store" .-> SO1
+    SO1 -. "stores rows in PostgreSQL via psycopg" .-> DA1
+    DA1 -. "supplies calc_history rows for History.recent() to build context" .-> CO2
+    CO1 -- "the evaluated result flows into the response" --> OUT1
 
     linkStyle default stroke:#6b7280,stroke-width:1.5px
-    linkStyle 8 stroke:#b45309,stroke-width:2.5px
+    linkStyle 0,1,6 stroke:#1565c0,stroke-width:2.5px
 ```
 
-## Key Notes
+File Catalog for the same project:
 
-| Step | file::Class.method / function | Purpose |
-|------|-------------------------------|---------|
-| Entry | `main.py::main()` | Reads env vars, starts uvicorn, loads the FastAPI app |
-| Config | `main.py::load_dotenv()` | Writes .env into env vars (called exactly once) |
-| Interface | `api/app.py::calculate()` | Receives user/expr/purge, maps user to thread_id |
-| Probe | `api/app.py::health()` | GET /health, returns {status: ok} |
-| Evaluate | `core/calc.py::Calculator.evaluate()` | Evaluates an expression, raises ValueError on failure |
-| History | `core/calc.py::Calculator.history()` | Fetches recent rows for a thread_id to rebuild the prompt |
-| Output | `api/app.py::Response` | Returns JSON:user / result / reply |
+| # | File | Role | Key symbols | What it does |
+|---|---|---|---|---|
+| 1 | `main.py` | entry | `main()` | starts the server, wires config and routes |
+| 2 | `api/routes.py` | iface | `calculate()` | validates POST /calc, orchestrates core |
+| 3 | `core/calc.py` | core | `Calculator.evaluate()` | evaluates arithmetic expressions |
+| 4 | `core/history.py` | core | `History.recent()` | loads prior turns for a thread |
+| 5 | `store/db.py` | data | `Database.upsert()` | PostgreSQL access layer |
 
-> Loop: evaluate → load history → recompute with context, until no expression fails, then respond.
-> Memory: one thread_id per user, history isolated per user; `purge: true` clears before recording.
-```
-````
+> External libraries (not drawn — no runtime boundary): FastAPI, pydantic, psycopg
 
-## Syntax red lines (verified against mermaid 11)
+## §13 Syntax red lines (verified against Mermaid 11)
 
-1. **No double quotes inside a node label.** `A["say "hi" now"]` fails to parse; `A["say "hi""]` parses but silently swallows the quotes; backslash-escaping (`\"`) is not supported either. Use 「」 or single quotes.
-2. **Angle brackets vanish silently** — in node *and* edge labels. `List<String>` becomes `List`; `<https://example.com>` disappears entirely. Since line ① carries real signatures, write generics as `List&lt;String&gt;` (or full-width `＜ ＞`). The `#lt;` / `#gt;` entity syntax is broken in mermaid 11 and renders as mojibake, like `#quot;`.
+1. **No double quotes inside a node label.** `A["say "hi" now"]` fails; `A["say "hi""]` parses but swallows quotes; backslash-escaping (`\"`) not supported. Use 「」 or single quotes.
+2. **Angle brackets vanish silently** — in node AND edge labels. `List<String>` → `List`; `<https://example.com>` disappears. Write generics as `List&lt;String&gt;` or full-width `＜ ＞`. `#lt;`/`#gt;` entities render as mojibake.
 3. `\n` does not break a line — use `<br/>`.
-4. A `%%` comment cannot share a line with code; it must sit on its own line.
+4. `%%` comment cannot share a line with code; must sit on its own line.
 5. Brackets cannot be omitted: `B[load(x)]` fails → **always quote labels**.
 6. Do not use `end`, `class`, `graph`, `style`, `subgraph`, `flowchart`, `linkStyle` as node ids (all fail), and do not use file names as ids.
 7. Declare a node once, inside its own subgraph — referencing it inside another subgraph silently **moves** it there.
 8. Edge labels never wrap (`white-space: nowrap`); break long ones with `<br/>` yourself.
 
-> Color classes, edge colors, and the optional fix for faint edge text live in the **Colors** section above.
+> Color classes, edge colors, and the optional fix for faint edge text live in the **§5 Colors** section above.
